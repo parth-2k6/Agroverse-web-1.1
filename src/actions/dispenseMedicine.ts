@@ -1,97 +1,97 @@
-
 // src/actions/dispenseMedicine.ts
 'use server';
 
 import { z } from 'zod';
 
 // Read the NodeMCU IP address from environment variable
-// IMPORTANT: Prefix with NEXT_PUBLIC_ if you need to access this on the client too,
-// but for a server action, non-prefixed is fine if set during build/server start.
-// Using NEXT_PUBLIC_ here for potential flexibility or if called client-side eventually.
 const NODEMCU_IP_ADDRESS = process.env.NEXT_PUBLIC_NODEMCU_IP_ADDRESS;
-console.log(`[Server Action dispenseMedicine] NodeMCU IP Address from env: ${NODEMCU_IP_ADDRESS}`); // Log IP on server start/load
+// Placeholder for a specific string NodeMCU might send if a medicine bottle is not ready/empty.
+const NODEMCU_BOTTLE_NOT_FOUND_INDICATOR = "BOTTLE_NOT_READY_FOR";
+
+// Log the IP address when the server action module is loaded/used by Vercel
+console.log(`[Server Action dispenseMedicine] NodeMCU IP Address from env: ${NODEMCU_IP_ADDRESS}`);
+if (!NODEMCU_IP_ADDRESS) {
+    console.error("[Server Action dispenseMedicine] CRITICAL: NEXT_PUBLIC_NODEMCU_IP_ADDRESS is not set in the Vercel environment.");
+}
 
 
-// Basic schema for the medicine name (could be expanded)
 const MedicineSchema = z.string().min(1, { message: "Medicine name cannot be empty" });
 
-/**
- * Sends an HTTP GET request to the NodeMCU device to trigger medicine dispensing.
- * @param medicineName The name of the medicine to dispense.
- * @returns Promise<boolean> - True if the request was likely sent successfully (status 200), false otherwise.
- * @throws Error if the request fails or the NodeMCU returns a non-200 status.
- */
 export async function dispenseMedicine(medicineName: string): Promise<boolean> {
-    console.log(`[Server Action] Attempting to dispense medicine: ${medicineName}`);
+    console.log(`[Server Action dispenseMedicine] Attempting to dispense: ${medicineName}. NodeMCU Target IP: ${NODEMCU_IP_ADDRESS}`);
 
-    // Validate input
     try {
         MedicineSchema.parse(medicineName);
     } catch (error) {
-        console.error("[Server Action] Invalid medicine name:", error);
+        console.error("[Server Action dispenseMedicine] Invalid medicine name:", error);
+        // It's good practice to throw an error that the client can understand or log.
+        // However, ensure it doesn't leak sensitive details.
         throw new Error("Invalid medicine name provided.");
     }
 
     if (!NODEMCU_IP_ADDRESS) {
-        console.error("[Server Action] Error: NEXT_PUBLIC_NODEMCU_IP_ADDRESS environment variable is not set.");
-        throw new Error("Dispensing device IP address is not configured in environment variables (NEXT_PUBLIC_NODEMCU_IP_ADDRESS).");
+        console.error("[Server Action dispenseMedicine] Error: NEXT_PUBLIC_NODEMCU_IP_ADDRESS environment variable is not set or not accessible in this server environment.");
+        // This specific error message should be clear enough for the client.
+        throw new Error("Dispensing device IP address is not configured. Please contact support or check Vercel environment variables.");
     }
 
     const url = `http://${NODEMCU_IP_ADDRESS}/dispense?medicine=${encodeURIComponent(medicineName)}`;
-    console.log(`[Server Action] Sending request to NodeMCU at: ${url}`);
+    console.log(`[Server Action dispenseMedicine] Sending GET request to NodeMCU at: ${url}`);
 
     try {
-        // Using fetch API available in Node.js 18+ and Next.js Edge/Serverless functions
         const response = await fetch(url, {
             method: 'GET',
-            signal: AbortSignal.timeout(7000), // 7 seconds timeout
+            signal: AbortSignal.timeout(10000), // Increased timeout to 10 seconds for potentially slower public connections
         });
 
-        console.log(`[Server Action] NodeMCU response status: ${response.status}`);
+        const responseStatus = response.status;
+        const responseText = await response.text(); // Get response text for checking and logging
+        console.log(`[Server Action dispenseMedicine] NodeMCU response status: ${responseStatus}`);
+        console.log("[Server Action dispenseMedicine] NodeMCU Response Text:", responseText);
+
 
         if (!response.ok) {
-            let responseBody = 'No additional error details from device.';
-            try {
-                responseBody = await response.text();
-            } catch (readError) {
-                 console.warn("[Server Action] Failed to read error response body from NodeMCU.");
+            console.error(`[Server Action dispenseMedicine] NodeMCU request failed. Status: ${responseStatus}, Body: ${responseText}`);
+            // Check if the response text contains the specific indicator for bottle not found
+            if (responseText.includes(`${NODEMCU_BOTTLE_NOT_FOUND_INDICATOR}_${medicineName}`)) {
+                console.warn(`[Server Action dispenseMedicine] NodeMCU indicated bottle not found for ${medicineName}.`);
+                throw new Error(`BOTTLE_NOT_FOUND:${medicineName}`); // Specific error for client to catch
             }
-            console.error(`[Server Action] NodeMCU returned error status ${response.status}. Body: ${responseBody}`);
-            throw new Error(`Dispensing device responded with status ${response.status}.`);
+            // Generic error if not the specific bottle issue
+            throw new Error(`Dispensing device responded with status ${responseStatus}. Message: ${responseText}`);
         }
 
-         // Example: Check response body for confirmation
-        // const responseText = await response.text();
-        // console.log("[Server Action] NodeMCU Response Text:", responseText);
-        // if (!responseText.includes("Dispensing command received")) { // Adjust expected text
-        //     console.warn("[Server Action] NodeMCU response did not contain expected confirmation.");
-        //     // Depending on strictness, you might throw an error here
-        //     // throw new Error("NodeMCU did not confirm dispensing command receipt.");
-        // }
-
-
-        console.log(`[Server Action] Successfully sent dispense command for ${medicineName} to ${NODEMCU_IP_ADDRESS}`);
-        return true; // Indicate successful request dispatch
+        console.log(`[Server Action dispenseMedicine] Successfully sent dispense command for ${medicineName} to ${NODEMCU_IP_ADDRESS}. NodeMCU response: ${responseText}`);
+        return true;
 
     } catch (error: any) {
-        console.error(`[Server Action] Error sending request to NodeMCU: ${error.name} - ${error.message}`);
-        if (error.name === 'TimeoutError' || error.code === 'ETIMEDOUT') {
-            throw new Error(`Dispensing device did not respond within 7 seconds. Check connection and IP: ${NODEMCU_IP_ADDRESS}`);
+        console.error(`[Server Action dispenseMedicine] Error during fetch operation or processing NodeMCU response: ${error.name} - ${error.message}`);
+        console.error("[Server Action dispenseMedicine] Full error object:", error); // Log the full error object on the server
+        
+        // If it's already our specific BOTTLE_NOT_FOUND error, re-throw it
+        if (error.message && error.message.startsWith('BOTTLE_NOT_FOUND:')) {
+            throw error;
         }
-        if (error.code === 'ECONNREFUSED') {
-             throw new Error(`Connection refused by dispensing device at ${NODEMCU_IP_ADDRESS}. Is it online and accessible?`);
-        }
-         if (error.code === 'ENETUNREACH' || error.code === 'EHOSTUNREACH') {
-             throw new Error(`Network unreachable. Cannot connect to dispensing device at ${NODEMCU_IP_ADDRESS}.`);
-        }
-         if (error.code === 'ECONNRESET') {
-             throw new Error(`Connection reset by dispensing device at ${NODEMCU_IP_ADDRESS}. Device might have restarted or closed the connection unexpectedly.`);
-        }
-         if (error.cause?.code === 'UND_ERR_CONNECT_TIMEOUT'){ // Node-fetch specific timeout
-             throw new Error(`Connection timed out while connecting to the dispensing device at ${NODEMCU_IP_ADDRESS}.`);
-         }
 
-        // Re-throw a processed or generic error message
-        throw new Error(`Failed to communicate with dispensing device: ${error.message}`);
+        let clientErrorMessage = 'Failed to communicate with dispensing device. Check connection and logs.';
+        // Handle specific network and timeout errors
+        if (error.name === 'TimeoutError' || error.code === 'ETIMEDOUT' || error.name === 'AbortError') {
+            clientErrorMessage = `Dispensing device did not respond within 10 seconds. Check connection and IP: ${NODEMCU_IP_ADDRESS}. Ensure it's publicly accessible.`;
+        } else if (error.code === 'ECONNREFUSED') {
+             clientErrorMessage = `Connection refused by dispensing device at ${NODEMCU_IP_ADDRESS}. Is it online and publicly accessible?`;
+        } else if (error.code === 'ENETUNREACH' || error.code === 'EHOSTUNREACH') {
+             clientErrorMessage = `Network unreachable. Cannot connect to dispensing device at ${NODEMCU_IP_ADDRESS}. Check firewall or network configuration.`;
+        } else if (error.code === 'ECONNRESET') {
+             clientErrorMessage = `Connection reset by dispensing device at ${NODEMCU_IP_ADDRESS}.`;
+        } else if (error.cause?.code === 'UND_ERR_CONNECT_TIMEOUT'){ // Node-fetch specific timeout
+             clientErrorMessage = `Connection timed out to dispensing device at ${NODEMCU_IP_ADDRESS}.`;
+        } else if (error.message && error.message.includes("fetch failed")) { // Generic fetch failure often DNS or network
+            clientErrorMessage = `Failed to fetch from NodeMCU at ${NODEMCU_IP_ADDRESS}. Ensure the address is correct and the device is accessible from Vercel's network.`;
+        } else if (error.message) {
+            clientErrorMessage = `Communication error with dispensing device: ${error.message}`;
+        }
+
+        // Re-throw a processed or generic error message that is safe for the client
+        throw new Error(clientErrorMessage);
     }
 }
