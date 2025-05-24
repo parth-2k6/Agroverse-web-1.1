@@ -1,0 +1,100 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper function to check if a user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper function to get user role
+    // Use exists() to prevent errors if the user document doesn't exist yet
+    function getUserRole(userId) {
+       let userDocPath = /databases/$(database)/documents/users/$(userId);
+       return exists(userDocPath) ? get(userDocPath).data.role : null; // Return null if doc doesn't exist
+    }
+
+    // Helper function to check if user has a specific role
+    function hasRole(role) {
+      let userRole = getUserRole(request.auth.uid);
+      return isAuthenticated() && userRole != null && userRole == role;
+    }
+
+    // Users Collection:
+    // - Allow users to read their own profile.
+    // - Allow authenticated users to create their profile upon signup (if it doesn't exist).
+    // - Allow users to update their own profile.
+    match /users/{userId} {
+      allow read, update: if isAuthenticated() && request.auth.uid == userId;
+      // Allow create only if the document doesn't exist yet and the user matches
+      allow create: if isAuthenticated() && request.auth.uid == userId && !exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    // Products Collection:
+    // - Allow authenticated users to read products.
+    // - Allow authenticated users with 'farmer' role to create products, ensuring sellerId matches.
+    // - Allow the seller (farmer) to update their own products.
+    // - Allow authenticated users (bidders, typically consumers, but not the seller) to update bid-related fields via transaction.
+    match /products/{productId} {
+      allow read: if isAuthenticated();
+      allow create: if hasRole('farmer') && request.resource.data.sellerId == request.auth.uid;
+
+      // Simplified update rule for hackathon:
+      // Seller can update their product.
+      // Any authenticated user who is NOT the seller can update (intended for bid transactions).
+      // SECURITY NOTE: This is broad. A Cloud Function triggered by bid creation is the recommended secure pattern
+      // to update product bid counts/amounts, as this rule allows non-sellers to potentially update other fields too.
+      allow update: if isAuthenticated() &&
+                     (
+                       (hasRole('farmer') && resource.data.sellerId == request.auth.uid) || // Seller can update
+                       (request.auth.uid != resource.data.sellerId)                   // Non-seller can update (for bids)
+                     );
+
+      // Delete is generally risky in a marketplace, maybe use a 'status' field instead.
+      // allow delete: if hasRole('farmer') && resource.data.sellerId == request.auth.uid;
+
+      // --- Bids Subcollection ---
+      match /bids/{bidId} {
+        allow read: if isAuthenticated();
+        // Allow consumer to create if they are authenticated, NOT the seller, and setting their own bidderId.
+        // Checks the user role from the 'users' collection.
+        allow create: if isAuthenticated() &&
+                       getUserRole(request.auth.uid) == 'consumer' &&
+                       get(/databases/$(database)/documents/products/$(productId)).data.sellerId != request.auth.uid &&
+                       request.resource.data.bidderId == request.auth.uid;
+
+        // Bids generally shouldn't be updated or deleted by users after creation.
+        allow update, delete: if false;
+      }
+    }
+
+     // Advice History Subcollection (within users)
+    match /users/{userId}/adviceHistory/{adviceId} {
+        allow read: if isAuthenticated() && request.auth.uid == userId;
+        allow create: if isAuthenticated() && request.auth.uid == userId && request.resource.data.userId == request.auth.uid; // Ensure user ID matches
+        allow update, delete: if false; // History should be immutable
+    }
+
+    // Diagnosis History Subcollection (within users)
+    match /users/{userId}/diagnoses/{diagnosisId} {
+        allow read: if isAuthenticated() && request.auth.uid == userId;
+        allow create: if isAuthenticated() && request.auth.uid == userId && request.resource.data.userId == request.auth.uid; // Ensure user ID matches
+         allow update, delete: if false; // History should be immutable
+    }
+
+    // Educational Content Collection (Example - adjust as needed)
+    // Allow any authenticated user to read.
+    // Allow farmers or admins (if added) to create/update/delete.
+    match /education/{contentId} {
+       allow read: if isAuthenticated();
+       // Example: Allow farmers to create/update/delete
+       // allow write: if hasRole('farmer');
+       // Or more granular:
+       allow create: if hasRole('farmer'); // Or admin later
+       allow update, delete: if hasRole('farmer'); // And potentially check resource.data.authorId == request.auth.uid
+    }
+
+
+  }
+}
