@@ -1,3 +1,4 @@
+
 // src/actions/dispenseMedicine.ts
 'use server';
 
@@ -12,6 +13,12 @@ const NODEMCU_BOTTLE_NOT_FOUND_INDICATOR = "BOTTLE_NOT_READY_FOR";
 console.log(`[Server Action dispenseMedicine] NodeMCU IP Address from env: ${NODEMCU_IP_ADDRESS}`);
 if (!NODEMCU_IP_ADDRESS) {
     console.error("[Server Action dispenseMedicine] CRITICAL: NEXT_PUBLIC_NODEMCU_IP_ADDRESS is not set in the Vercel environment.");
+} else {
+    // Check if the IP address looks like a private/local IP
+    const ipPattern = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.|169\.254\.)/;
+    if (ipPattern.test(NODEMCU_IP_ADDRESS)) {
+        console.warn(`[Server Action dispenseMedicine] WARNING: The configured NodeMCU IP address '${NODEMCU_IP_ADDRESS}' appears to be a private/local IP address. Vercel functions may not be able to reach it unless it's publicly accessible (e.g., via ngrok or port forwarding).`);
+    }
 }
 
 
