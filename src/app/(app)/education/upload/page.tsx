@@ -1,7 +1,7 @@
 // src/app/(app)/education/upload/page.tsx
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react'; // Added useEffect
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -11,35 +11,36 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'; // Import Select
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/context/AuthContext';
-import { db } from '@/firebase/firebase.config'; // Import db (can be null)
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore'; // Import Firestore functions
+import { db } from '@/firebase/firebase.config';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2, UploadCloud, ArrowLeft, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
-import { type EducationItem, ContentType } from '@/types/education'; // Import types
+import { type EducationItem, ContentType } from '@/types/education';
 
 // Zod schema for education content form validation
 const educationSchema = z.object({
   title: z.string().min(5, { message: 'Title must be at least 5 characters.' }),
   description: z.string().min(10, { message: 'Description must be at least 10 characters.' }),
-  type: z.nativeEnum(ContentType, { required_error: "Please select a content type." }), // Use enum for type
-  imageUrl: z.string().url({ message: 'Please enter a valid image URL for the thumbnail.' }).optional().or(z.literal('')), // Optional image URL
-  contentUrl: z.string().url({ message: 'Please enter a valid URL for Video/External Article/PDF.' }).optional().or(z.literal('')), // URL for video/external content
-  contentText: z.string().optional(), // For directly entered article text
+  type: z.nativeEnum(ContentType, { required_error: "Please select a content type." }),
+  imageUrl: z.string().url({ message: 'Please enter a valid image URL for the thumbnail.' }).optional().or(z.literal('')),
+  contentUrl: z.string().url({ message: 'Please enter a valid URL for Video/External Article/PDF.' }).optional().or(z.literal('')),
+  contentText: z.string().optional(),
 }).refine(data => {
-    // Require contentUrl for Video type
-    if (data.type === ContentType.Video && !data.contentUrl) return false;
-    // Require either contentUrl OR contentText for Article/PDF (adjust if PDF upload is added later)
-    if ((data.type === ContentType.Article || data.type === ContentType.PDF) && !data.contentUrl && !data.contentText) return false;
-    return true;
+    if (data.type === ContentType.Video) {
+        return !!data.contentUrl; // Video must have a contentUrl
+    }
+    if (data.type === ContentType.Article || data.type === ContentType.PDF) {
+        return !!data.contentUrl || !!data.contentText; // Article/PDF must have URL or Text (for PDF, URL is more practical)
+    }
+    return true; // Should not happen if type is selected
 }, {
-    message: "Please provide either a Content URL (for Videos, external links) or Content Text (for articles).",
-    // Apply the error to a specific path if needed, or keep it general
-    // path: ["contentUrl"], // Or ["contentText"] or a more general path
+    message: "For Videos, a Content URL is required. For Articles or PDFs, please provide either an External Link or Content Text.",
+    // path: ["contentUrl"], // You can specify a path if the error is more specific to one field
 });
 
 
@@ -67,12 +68,19 @@ export default function UploadEducationPage() {
   // Watch the 'type' field to conditionally show/hide fields
   const contentType = form.watch('type');
 
+  // Log form state errors for easier debugging
+  useEffect(() => {
+    if (Object.keys(form.formState.errors).length > 0) {
+        console.log("Form validation errors:", form.formState.errors);
+    }
+  }, [form.formState.errors]);
+
+
   const onSubmit = async (values: EducationFormValues) => {
     console.log("Form submitted with values:", values);
-    setFormError(null); // Clear previous form errors
+    setFormError(null);
     setIsLoading(true);
 
-    // --- Pre-submission Checks ---
     if (!user) {
         setFormError('You must be logged in to upload content.');
         toast({ title: 'Login Required', variant: 'destructive' });
@@ -86,29 +94,35 @@ export default function UploadEducationPage() {
         setIsLoading(false);
         return;
     }
-    // --- End Pre-submission Checks ---
+
+    if (!values.type) {
+        setFormError('Content type is required. Please select a type.');
+        toast({ title: 'Validation Error', description: 'Please select a content type.', variant: 'destructive' });
+        setIsLoading(false);
+        return;
+    }
+
 
     try {
-      // --- Add education data to Firestore ---
       const educationData: Omit<EducationItem, 'id' | 'createdAt'> & { createdAt: any } = {
         title: values.title,
         description: values.description,
         type: values.type,
-        imageUrl: values.imageUrl || null, // Store null if empty
-        contentUrl: values.contentUrl || null, // Store null if empty
-        contentText: values.contentText || null, // Store null if empty
-        authorId: user.uid, // ID of the user uploading
-        author: user.displayName || user.email || 'Anonymous', // Name of the user
+        imageUrl: values.imageUrl || null,
+        contentUrl: values.contentUrl || null,
+        contentText: values.contentText || null,
+        authorId: user.uid,
+        author: user.displayName || user.email || 'Anonymous',
         createdAt: serverTimestamp(),
       };
 
-      console.log("Attempting to add education content to Firestore:", educationData);
+      console.log("Attempting to add education content to Firestore with data:", educationData);
       const educationCollectionRef = collection(db, 'education');
       const docRef = await addDoc(educationCollectionRef, educationData);
 
       console.log('Content uploaded successfully with ID: ', docRef.id);
       toast({ title: 'Success', description: 'Educational content uploaded successfully!' });
-      router.push('/education'); // Redirect after success
+      router.push('/education');
 
     } catch (error: any) {
         console.error('Error uploading content to Firestore:', error);
@@ -129,7 +143,6 @@ export default function UploadEducationPage() {
      return <div className="flex justify-center items-center min-h-[200px]"><Loader2 className="h-8 w-8 animate-spin" /> Loading user data...</div>;
    }
 
-   // Handle case where user is loaded but not logged in
    if (!user && !authLoading) {
         return (
             <div className="space-y-6">
@@ -147,7 +160,6 @@ export default function UploadEducationPage() {
         );
     }
 
-   // Handle Firebase config error
     if (!isConfigured) {
          return (
              <div className="space-y-6">
@@ -165,7 +177,6 @@ export default function UploadEducationPage() {
          );
      }
 
-  // Main form rendering if user is authenticated and configured
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
          <div className="flex items-center gap-4">
@@ -190,7 +201,6 @@ export default function UploadEducationPage() {
         <CardContent>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-               {/* Title Field */}
                <FormField
                 control={form.control}
                 name="title"
@@ -205,7 +215,6 @@ export default function UploadEducationPage() {
                 )}
               />
 
-              {/* Description Field */}
               <FormField
                 control={form.control}
                 name="description"
@@ -220,7 +229,6 @@ export default function UploadEducationPage() {
                 )}
               />
 
-               {/* Content Type Field */}
                <FormField
                   control={form.control}
                   name="type"
@@ -244,7 +252,6 @@ export default function UploadEducationPage() {
                   )}
                 />
 
-              {/* Thumbnail Image URL Field (Optional) */}
                <FormField
                 control={form.control}
                 name="imageUrl"
@@ -264,7 +271,6 @@ export default function UploadEducationPage() {
                 )}
               />
 
-              {/* Conditional Content Fields */}
               {contentType === ContentType.Video && (
                   <FormField
                     control={form.control}
@@ -287,7 +293,7 @@ export default function UploadEducationPage() {
                     name="contentUrl"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>External Link (Optional)</FormLabel>
+                        <FormLabel>External Link {contentType === ContentType.PDF ? <span className="text-destructive">*</span> : '(Optional for Articles)'}</FormLabel>
                          <FormControl>
                             <Input type="url" placeholder="URL to external article or PDF" {...field} disabled={isLoading}/>
                         </FormControl>
@@ -303,7 +309,7 @@ export default function UploadEducationPage() {
                     name="contentText"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Article Text (Optional)</FormLabel>
+                        <FormLabel>Article Text (Optional if External Link provided)</FormLabel>
                          <FormControl>
                            <Textarea placeholder="Paste or write your article content here..." {...field} rows={10} disabled={isLoading}/>
                         </FormControl>
@@ -313,7 +319,6 @@ export default function UploadEducationPage() {
                   />
                )}
 
-                {/* Display general form error if refine fails */}
                  {form.formState.errors.root && (
                       <Alert variant="destructive" className="mt-4">
                         <AlertCircle className="h-4 w-4" />
@@ -330,7 +335,7 @@ export default function UploadEducationPage() {
                  )}
 
 
-              <Button type="submit" className="w-full" disabled={isLoading}>
+              <Button type="submit" className="w-full" disabled={isLoading || !form.formState.isDirty || !form.formState.isValid}>
                 {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UploadCloud className="mr-2 h-4 w-4" />}
                 {isLoading ? 'Uploading Content...' : 'Upload Content'}
               </Button>
