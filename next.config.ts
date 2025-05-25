@@ -23,6 +23,12 @@ const nextConfig: NextConfig = {
         port: '',
         pathname: '/**',
       },
+      {
+        protocol: 'https',
+        hostname: 'i.ibb.co', // Added ImgBB hostname
+        port: '',
+        pathname: '/**',
+      },
       // Removed imgur.com, i.imgur.com, images.unsplash.com, plus.unsplash.com
       // Since we are asking users for direct image URLs, we should add specific allowed hostnames
       // as needed, rather than broad domains.
@@ -47,7 +53,7 @@ const nextConfig: NextConfig = {
 //     console.log(`   Hostname: ${firebaseStorageHostname}`);
 //     console.log(`   Pathname: ${firebaseStoragePathname}`);
 // }
-console.log("Configured next/image remotePatterns for picsum.photos. Add other direct image hostnames as needed.");
+console.log("Configured next/image remotePatterns for picsum.photos and i.ibb.co. Add other direct image hostnames as needed.");
 
 export default nextConfig;
 
